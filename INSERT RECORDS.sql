@@ -1,0 +1,1 @@
+INSERT INTO Customers (CustomerID, CustomerName) VALUES (31,'NDTV CO'),(91,'AAJ TAK'),(131,'NY TIMES CO)')

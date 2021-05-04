@@ -1,0 +1,139 @@
+#Login and Create Resource Group
+az login
+az group create --name RG-SQLAG --location eastus
+
+#Create AKS cluster
+az aks create --resource-group RG-SQLAG --name SQLAG --node-count 3 \
+ --generate-ssh-keys --node-vm-size=Standard_B2ms
+
+ # Get credentials for the cluster so we can connect
+az aks get-credentials --resource-group RG-SQLAG --name SQLAG
+
+# List nodes
+kubectl get nodes
+# List Pods
+kubectl get pods
+
+# Create external storage with PV and PVC
+kubectl apply -f sqlAGstorage.yaml
+
+# Display the persistent volume and claim
+kubectl get pv
+kubectl get pvc
+
+# Use K8 secrets to hold required sa password for SQL Server container
+kubectl create secret generic mssql-secret \
+ --from-literal=SA_PASSWORD="Welcome@0001234567"
+
+# Deploy the SQL Server 2019 container
+
+# Primary Replica Deployment
+kubectl apply -f sqlAGPdeployment.yaml --record
+
+# Secondary Replica1 Deployment
+kubectl apply -f sqlAGS1deployment.yaml --record
+
+# Secondary Replica2 Deployment
+kubectl apply -f sqlAGS2deployment.yaml --record
+
+# Get the status of the nodes, pods and service
+kubectl get all
+
+# Retrieve external IP address of the primary and secondary replicas
+ip1=$(kubectl get services | grep mssql-primary | cut -c49-63)
+ip2=$(kubectl get services | grep mssql-secondary1 | cut -c49-63)
+ip3=$(kubectl get services | grep mssql-secondary2 | cut -c49-63)
+
+echo IP addresses of the replicas  $ip1, $ip2, $ip3
+ 
+#Create Primary & secondary replicas from SQL script and create certificates in 
+#Primary replica 
+
+# Now Copy the certificates from the  primary to the local
+# First Retrieve pod name to variable
+podagp=$(kubectl get pods -l app=mssql-primary -o custom-columns=:metadata.name)
+podags1=$(kubectl get pods -l app=mssql-secondary1 -o custom-columns=:metadata.name)
+podags2=$(kubectl get pods -l app=mssql-secondary2 -o custom-columns=:metadata.name)
+
+#prepare variables
+PathToCopyCert=${podagp}":var/opt/mssql/ag_certificate.cert"
+PathToCopyCertKey=${podagp}":var/opt/mssql/ag_certificate.key"
+
+# First copy to local
+kubectl cp $podagp:var/opt/mssql/ag_certificate.cert ag_certificate.cert
+kubectl cp $podagp:var/opt/mssql/ag_certificate.key ag_certificate.key
+
+# Copy the certificate from local host to secondary1
+echo Copying AG certificates from localhost to pod $podags1
+kubectl cp ag_certificate.cert  $podags1:var/opt/mssql
+kubectl cp ag_certificate.key  $podags1:var/opt/mssql
+
+# Next copy to secondary2
+kubectl cp ag_certificate.cert $podags2:var/opt/mssql 
+kubectl cp ag_certificate.key $podags2:var/opt/mssql
+
+# Now start the testing if SQL Always on Availabilty  by causing failover 
+podname=$(kubectl get pods -l app=mssql-primary -o custom-columns=:metadata.name)
+echo $podname
+kubectl delete pod $podname
+sleep 3
+kubectl get pods
+
+# Some Important troubleshooting commands
+#Get the current status of the deployment 
+kubectl get all
+
+#Get the current resource usage
+kubectl top nodes
+kubectl top pods
+
+#Retrieve pod IP addresses 
+kubectl get services
+
+#Retrieving YAML declarations 
+kubectl get <pod_name> -o yaml
+
+# Dump POD info
+kubectl describe pods  mssqlag-secondary1-deployment-c7559dd7d-w42lz
+
+#Describe a deployment 
+kubectl describe deployments
+
+#Describe a pod
+kubectl describe pod -1 app=mssql-primary
+
+#Describe the storage 
+kubectl describe pv 
+kubectl describe pvc
+
+# Display the Kubernetes Logs
+kubectl logs -l app=mssql
+# Display the logs from a previous run# Use the -p flag to look at the logs 
+#from containers that  have exited
+
+# Display the all events sorted
+kubectl get events --sort-by=.metadata.creationTimestamp
+
+# Display pod events
+kubectl get events --field-selector involvedObject.kind=Pod
+
+# Delete the deployment
+kubectl delete -f sqlAGPdeployment.yaml
+
+# Getting Kubernetes secrets
+kubectl get secret mssql-secret -o jsonpath="{.data.SA_PASSWORD}" | base64 --decode
+
+# Get pod name
+podname=$(kubectl get pods -l app=mssql-primary -o custom-columns=:metadata.name)
+
+# Running individual commands in the pod’s container
+kubectl exec -it $podname--top
+
+# Opening an interactive shell in the pod’s container
+kubectl exec -it $podname--/bin/bash
+
+#Run command on POD directly without login
+kubectl exec -it $podname -- /opt/mssql-tools/bin/sqlcmd -S. -U sa -P SQL2019AGPassword -Q 'select @@version'
+
+# Browse AKS dashboard
+az aks browse --resource-group RG-SQLAG --name SQLAG

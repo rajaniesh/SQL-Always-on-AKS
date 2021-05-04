@@ -1,0 +1,63 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mssqlag-secondary1-deployment
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mssql-secondary1
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: mssql-secondary1
+    spec:
+      terminationGracePeriodSeconds: 10
+      securityContext:
+        fsGroup: 1000
+      hostname: mssql-secondary1
+      containers:
+      - name: mssql-secondary1
+        image: mcr.microsoft.com/mssql/rhel/server:2019-latest
+        env:
+        - name: ACCEPT_EULA
+          value: "Y"
+        - name: MSSQL_PID
+          value: "Developer"
+        - name: MSSQL_ENABLE_HADR
+          value: "1"
+        - name: MSSQL_AGENT_ENABLED
+          value: "true"
+        - name: MSSQL_SA_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: mssql-secret
+              key: SA_PASSWORD
+        resources:
+          limits:
+            memory: 4G     
+        volumeMounts:
+        - name: mssqldb
+          mountPath: /var/opt/mssql
+      volumes:
+      - name: mssqldb
+        persistentVolumeClaim:
+          claimName: mssql-secondary1  
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mssql-secondary1
+spec:
+  selector:
+    app: mssql-secondary1
+  ports:
+    - name: sqlserver
+      port: 1433
+      targetPort: 1433
+    - name: endpoint
+      port: 5022
+      targetPort: 5022  
+  type: LoadBalancer    
